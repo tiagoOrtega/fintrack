@@ -1,0 +1,18 @@
+{
+  "name": "fintrack-proxy",
+  "version": "1.0.0",
+  "description": "Open Finance Brasil proxy for FinTrack",
+  "main": "proxy.js",
+  "scripts": {
+    "start": "node proxy.js",
+    "dev": "node --watch proxy.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "node-fetch": "^2.7.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
