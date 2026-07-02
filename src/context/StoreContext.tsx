@@ -9,9 +9,9 @@ type StoreContextType = ReturnType<typeof useStore> & {
 
 const StoreContext = createContext<StoreContextType | null>(null)
 
-export function StoreProvider({ children }: { children: ReactNode }) {
-  const store = useStore()
-  const gs    = useGoogleSheets()
+export function StoreProvider({ userId, children }: { userId: string; children: ReactNode }) {
+  const store = useStore(userId)
+  const gs    = useGoogleSheets(userId)
 
   // Track latest store in a ref so the debounced callback always sees fresh data
   const latestStore    = useRef(store)

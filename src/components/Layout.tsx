@@ -7,8 +7,10 @@ import {
   Settings,
   Wallet,
   Landmark,
+  LogOut,
 } from 'lucide-react'
 import { useStoreCtx } from '../context/StoreContext'
+import { useAuthCtx } from '../context/AuthContext'
 
 const nav = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
@@ -21,6 +23,7 @@ const nav = [
 
 export default function Layout() {
   const { connectedBanks } = useStoreCtx()
+  const { user, logout } = useAuthCtx()
   return (
     <div className="flex h-screen bg-gray-50 text-gray-900 overflow-hidden">
       {/* Sidebar */}
@@ -53,8 +56,24 @@ export default function Layout() {
             </NavLink>
           ))}
         </nav>
-        <div className="px-5 py-4 border-t border-gray-100 text-xs text-gray-400">
-          FinTrack v1.0 · Data local
+        <div className="border-t border-gray-100">
+          {user && (
+            <div className="flex items-center gap-2 px-5 py-3">
+              <span className="flex-1 text-xs font-medium text-gray-600 truncate">
+                {user.displayName ?? user.email}
+              </span>
+              <button
+                onClick={logout}
+                title="Log out"
+                className="text-gray-400 hover:text-gray-700 transition-colors"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+          <div className="px-5 pb-4 text-xs text-gray-400">
+            FinTrack v1.0 · Local data · Server login
+          </div>
         </div>
       </aside>
 

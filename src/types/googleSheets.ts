@@ -12,6 +12,10 @@ export interface GoogleSheetsConfig {
 
 export const GS_CONFIG_KEY = 'fintrack_gs_config'
 
+export function getGsConfigKey(userId: string): string {
+  return `${GS_CONFIG_KEY}_${userId}`
+}
+
 export const DEFAULT_GS_CONFIG: GoogleSheetsConfig = {
   connected: false,
   accessToken: '',

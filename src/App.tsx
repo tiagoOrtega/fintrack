@@ -1,6 +1,8 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
-import { StoreProvider } from './context/StoreContext'
+import { AuthProvider } from './context/AuthContext'
+import RequireAuth, { AuthedStoreProvider } from './components/RequireAuth'
 import Layout from './components/Layout'
+import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Investments from './pages/Investments'
 import Expenses from './pages/Expenses'
@@ -10,10 +12,20 @@ import Settings from './pages/Settings'
 
 export default function App() {
   return (
-    <StoreProvider>
+    <AuthProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<Layout />}>
+          <Route path="/login" element={<Login />} />
+          <Route
+            path="/"
+            element={
+              <RequireAuth>
+                <AuthedStoreProvider>
+                  <Layout />
+                </AuthedStoreProvider>
+              </RequireAuth>
+            }
+          >
             <Route index element={<Dashboard />} />
             <Route path="investments" element={<Investments />} />
             <Route path="expenses" element={<Expenses />} />
@@ -25,6 +37,6 @@ export default function App() {
           </Route>
         </Routes>
       </BrowserRouter>
-    </StoreProvider>
+    </AuthProvider>
   )
 }

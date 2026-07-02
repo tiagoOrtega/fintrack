@@ -21,6 +21,8 @@
 
 'use strict'
 
+require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') })
+
 const express  = require('express')
 const cors     = require('cors')
 const https    = require('https')
@@ -38,6 +40,7 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? 'http://localhost:5173')
 
 app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }))
 app.use(express.json({ limit: '1mb' }))
+app.use('/auth', require('./auth'))
 
 // ── mTLS agent ───────────────────────────────────────────────────────────────
 

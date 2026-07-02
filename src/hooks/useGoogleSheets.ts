@@ -1,30 +1,61 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import type { AppStore } from '../types'
 import type { GoogleSheetsConfig } from '../types/googleSheets'
-import { GS_CONFIG_KEY, DEFAULT_GS_CONFIG } from '../types/googleSheets'
+import { getGsConfigKey, DEFAULT_GS_CONFIG } from '../types/googleSheets'
 import {
   startGoogleAuth,
   handleGoogleCallback,
   refreshGoogleToken,
   googleClientConfigured,
 } from '../services/googleSheets/auth'
+import type { GoogleTokens } from '../services/googleSheets/auth'
 import { createSpreadsheet } from '../services/googleSheets/api'
 import { pushToSheets } from '../services/googleSheets/sync'
 
-function loadConfig(): GoogleSheetsConfig {
+function loadConfigFromKey(key: string): GoogleSheetsConfig {
   try {
-    const raw = localStorage.getItem(GS_CONFIG_KEY)
+    const raw = localStorage.getItem(key)
     if (raw) return { ...DEFAULT_GS_CONFIG, ...(JSON.parse(raw) as GoogleSheetsConfig) }
   } catch { /* ignore */ }
   return { ...DEFAULT_GS_CONFIG }
 }
 
-function saveConfig(config: GoogleSheetsConfig): void {
-  localStorage.setItem(GS_CONFIG_KEY, JSON.stringify(config))
+function saveConfigToKey(key: string, config: GoogleSheetsConfig): void {
+  localStorage.setItem(key, JSON.stringify(config))
 }
 
-export function useGoogleSheets() {
-  const [config, setConfig] = useState<GoogleSheetsConfig>(loadConfig)
+// Reusable outside the hook (e.g. Login.tsx's "Continue with Google" flow) —
+// creates the spreadsheet only on first connect so repeat Google logins
+// (which always re-run the OAuth consent screen) don't create duplicates.
+export async function connectOrRefreshFromTokens(userId: string, tokens: GoogleTokens): Promise<void> {
+  const key = getGsConfigKey(userId)
+  const existing = loadConfigFromKey(key)
+
+  if (existing.connected && existing.spreadsheetId) {
+    saveConfigToKey(key, {
+      ...existing,
+      accessToken:  tokens.accessToken,
+      refreshToken: tokens.refreshToken || existing.refreshToken,
+      tokenExpiry:  tokens.tokenExpiry,
+      userEmail:    tokens.userEmail,
+    })
+    return
+  }
+
+  const { id, url } = await createSpreadsheet(tokens.accessToken)
+  saveConfigToKey(key, {
+    ...DEFAULT_GS_CONFIG,
+    connected: true,
+    ...tokens,
+    spreadsheetId:  id,
+    spreadsheetUrl: url,
+    autoSync:       true,
+  })
+}
+
+export function useGoogleSheets(userId: string) {
+  const configKey = getGsConfigKey(userId)
+  const [config, setConfig] = useState<GoogleSheetsConfig>(() => loadConfigFromKey(configKey))
   const [isSyncing,    setIsSyncing]    = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
   const [lastError,    setLastError]    = useState<string | null>(null)
@@ -37,8 +68,8 @@ export function useGoogleSheets() {
   const update = useCallback((next: GoogleSheetsConfig) => {
     configRef.current = next
     setConfig(next)
-    saveConfig(next)
-  }, [])
+    saveConfigToKey(configKey, next)
+  }, [configKey])
 
   // Keep configRef in sync on every render (covers external updates)
   useEffect(() => { configRef.current = config }, [config])
@@ -62,23 +93,16 @@ export function useGoogleSheets() {
       setLastError('VITE_GOOGLE_CLIENT_ID is not set. Add it to your .env file and restart the dev server.')
       return
     }
-    await startGoogleAuth()   // redirects the page
+    await startGoogleAuth('/settings')   // redirects the page
   }, [])
 
   const finishConnect = useCallback(async (code: string, state: string): Promise<boolean> => {
     setIsConnecting(true)
     setLastError(null)
     try {
-      const tokens     = await handleGoogleCallback(code, state)
-      const { id, url } = await createSpreadsheet(tokens.accessToken)
-      update({
-        ...DEFAULT_GS_CONFIG,
-        connected:     true,
-        ...tokens,
-        spreadsheetId:  id,
-        spreadsheetUrl: url,
-        autoSync:       true,
-      })
+      const tokens = await handleGoogleCallback(code, state, '/settings')
+      await connectOrRefreshFromTokens(userId, tokens)
+      update(loadConfigFromKey(configKey))
       return true
     } catch (err) {
       setLastError(err instanceof Error ? err.message : String(err))
@@ -86,7 +110,7 @@ export function useGoogleSheets() {
     } finally {
       setIsConnecting(false)
     }
-  }, [update])
+  }, [update, userId, configKey])
 
   const disconnect = useCallback(() => {
     update({ ...DEFAULT_GS_CONFIG })

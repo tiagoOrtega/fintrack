@@ -1,8 +1,10 @@
 # FinTrack — Personal Finance Manager
 
-A client-side web application for tracking investment portfolios and personal expenses.
-Supports optional **Google Sheets** remote backup and **Open Finance Brasil** bank integration.
-All personal data is stored locally in the browser — no backend account required.
+A self-hosted web application for tracking investment portfolios and personal expenses.
+Supports **login** (self-hosted email/password accounts or "Continue with Google"),
+optional **Google Sheets** remote backup, and **Open Finance Brasil** bank integration.
+Financial data is stored locally in the browser, namespaced per account; login accounts
+themselves are stored server-side in the proxy, which is required to run the app.
 
 ---
 
@@ -32,10 +34,15 @@ bash setup.sh
 ```
 
 The app opens automatically at **http://localhost:5173**.  
-The Open Finance proxy starts on **http://localhost:3001**.  
+The proxy (required for login) starts on **http://localhost:3001**.  
 Press `Ctrl+C` to stop both servers.
 
 > On subsequent runs the scripts skip `npm install` if `node_modules` is already up to date.
+
+The proxy is required — it checks passwords and issues login sessions, so the app can no
+longer run standalone the way earlier versions did. On first run, set `JWT_SECRET` in
+`.env` (see [Login](#login) below) or accept the auto-generated development secret the
+proxy warns about on startup.
 
 ---
 
@@ -62,24 +69,29 @@ npm install                          # React app
 cd server && npm install && cd ..    # OFB proxy
 ```
 
-### 3. Configure environment (optional features)
+### 3. Configure environment
 
 ```bash
 cp .env.example .env
-# Edit .env — add VITE_GOOGLE_CLIENT_ID and/or VITE_OFB_CLIENT_ID
+# Generate a login secret and add it:
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+# Edit .env — set JWT_SECRET, and add VITE_GOOGLE_CLIENT_ID / VITE_OFB_CLIENT_ID for optional features
 ```
+
+`JWT_SECRET` is the only variable actually required to run the app — without it the proxy
+generates a random one at startup, but every restart invalidates all login sessions.
 
 ### 4. Start both servers
 
 ```bash
-# Terminal 1 — Open Finance proxy (port 3001)
+# Terminal 1 — proxy: login, Open Finance Brasil relay (port 3001)
 npm run proxy
 
 # Terminal 2 — React dev server (port 5173)
 npm run dev
 ```
 
-Open **http://localhost:5173** in your browser.
+Open **http://localhost:5173** in your browser and create an account.
 
 ---
 
@@ -88,11 +100,62 @@ Open **http://localhost:5173** in your browser.
 | Command | What it does |
 |---|---|
 | `npm run dev` | Start React dev server with hot reload at http://localhost:5173 |
-| `npm run proxy` | Start Open Finance Brasil proxy at http://localhost:3001 |
+| `npm run proxy` | Start the proxy (login backend + Open Finance Brasil relay) at http://localhost:3001 — required for login |
 | `npm run proxy:dev` | Start proxy with `--watch` (auto-restarts on file changes) |
 | `npm run build` | Compile and bundle for production into `dist/` |
 | `npm run preview` | Serve the production build locally at http://localhost:4173 |
 | `npx tsc --noEmit` | Type-check the project without building |
+
+---
+
+## Login
+
+FinTrack requires signing in — either with a self-hosted email/password account, or
+"Continue with Google." The proxy server (`server/proxy.js`) hosts the login backend;
+it must be running for anyone to sign in.
+
+### Self-hosted accounts
+
+Password accounts are created directly in the app (**Create account** on the login
+screen) — there's no admin step needed. Passwords are hashed with bcrypt and stored in
+`server/data/users.json` (gitignored; never commit it). Multiple people can register
+separate accounts on the same deployment.
+
+### "Continue with Google"
+
+Signing in with Google reuses the same OAuth client and flow as **Google Sheets Backup**
+below — it verifies your identity *and* connects Sheets backup in one step. It requires
+`VITE_GOOGLE_CLIENT_ID` to be configured (see the Google Sheets Backup section) and the
+Google Cloud OAuth client's authorized redirect URIs must include **both**:
+
+- `http://localhost:5173/login` (login)
+- `http://localhost:5173/settings` (reconnecting Sheets backup later without logging out)
+
+### Account linking
+
+A password account and a Google account that share the same email address are treated
+as the same account (linked automatically). This is convenient — sign up with a
+password, then later use "Continue with Google" with that email, and you land back in
+the same account — but note it relies on trusting whoever registers an email first,
+since password signups aren't email-verified. For a small, trusted self-hosted
+deployment this is an accepted tradeoff; don't expose registration to untrusted users
+without addressing this.
+
+### Environment variables
+
+| Variable | Where | Required | Description |
+|---|---|---|---|
+| `JWT_SECRET` | `.env` (project root) | Recommended | Signs login sessions. Auto-generated (and warned about) if unset — sessions reset every proxy restart. |
+| `JWT_EXPIRES_IN` | `.env` (project root) | No | How long a session lasts before requiring re-login. Default `30d`. |
+| `VITE_GOOGLE_CLIENT_ID` | `.env` (project root) | For Google login | Same client ID used by Google Sheets Backup; also read server-side to verify Google login tokens. |
+
+### Data isolation between accounts
+
+Each account's financial data and Google Sheets connection are namespaced by user ID in
+localStorage (see [Data Storage](#data-storage)) — multiple accounts on the same browser
+don't see each other's data. Login sessions and financial data are otherwise independent:
+logging in from a second browser/device starts with an empty local dataset under that
+account (there's no server-side sync of financial data, only of accounts themselves).
 
 ---
 
@@ -108,7 +171,8 @@ Connect your Google account to automatically save a live copy of all your data �
 4. Choose application type: **Desktop app** — give it a name (e.g. `FinTrack`)
 5. Click **Create** and copy the **Client ID** shown
 6. Back in the credential detail page, add these **Authorized redirect URIs**:
-   - `http://localhost:5173/settings`
+   - `http://localhost:5173/login` (used by "Continue with Google" login)
+   - `http://localhost:5173/settings` (used when reconnecting Sheets backup from Settings)
 7. Add this **Authorized JavaScript origin**:
    - `http://localhost:5173`
 8. Paste the client ID into your `.env` file:
@@ -117,10 +181,16 @@ Connect your Google account to automatically save a live copy of all your data �
 VITE_GOOGLE_CLIENT_ID=123456789-xxxx.apps.googleusercontent.com
 ```
 
-9. Restart the dev server: `npm run dev`
+9. Restart both servers so the proxy also picks up the new client ID (used to verify
+   Google login tokens): `npm run proxy` and `npm run dev`
 
 ### Connecting in the app
 
+**Option A — sign in with Google (also sets up backup):** on the login screen, click
+**Continue with Google**. This authenticates you *and* connects Sheets backup in one step.
+
+**Option B — connect backup separately:** if you're already logged in with a
+password account,
 1. Go to **Settings** in the sidebar
 2. Under **Google Sheets Backup**, click **Sign in with Google**
 3. Approve access in the Google popup — you are redirected back automatically
@@ -175,16 +245,12 @@ The proxy (`server/proxy.js`) runs on **port 3001** and handles:
 
 ### Environment variables
 
-Create a `.env` in the project root:
+The proxy loads the same root `.env` as the React app (via `dotenv`) — one file for both:
 
 ```env
 VITE_OFB_CLIENT_ID=your-client-id-here   # OAuth client from OFB directory
 VITE_PROXY_URL=http://localhost:3001       # default, change only if proxy port differs
-```
 
-Create a `server/.env` for the proxy:
-
-```env
 PORT=3001
 
 # mTLS certificates — production only, leave unset for sandbox mode
@@ -219,9 +285,12 @@ fintrack/
 ├── .env.example                Environment variable reference (copy to .env)
 ├── setup.ps1                   Windows: full setup + start (single command)
 ├── setup.sh                    Linux/macOS: full setup + start (single command)
-├── server/                     Open Finance Brasil proxy server
-│   ├── proxy.js                Express proxy (port 3001): mTLS, token exchange, consent
-│   └── package.json            Server dependencies (express, cors, node-fetch)
+├── server/                     Proxy server: login backend + Open Finance Brasil relay
+│   ├── proxy.js                Express app (port 3001): mounts /auth, mTLS, token exchange, consent
+│   ├── auth.js                 Login routes: /auth/register, /login, /google, /me
+│   ├── store.js                JSON-file user store (server/data/users.json, gitignored)
+│   └── package.json            Server dependencies (express, cors, node-fetch, bcryptjs,
+│                                jsonwebtoken, google-auth-library, dotenv)
 ├── public/                     Static assets served as-is
 ├── src/
 │   ├── components/             Shared UI components
@@ -230,16 +299,20 @@ fintrack/
 │   │   ├── BankConnectWizard.tsx  3-step wizard: select bank → choose scopes → redirect
 │   │   ├── ExpenseForm.tsx     Add/edit expense modal form
 │   │   ├── InvestmentForm.tsx  Add/edit investment modal form
-│   │   ├── Layout.tsx          App shell with sidebar navigation
+│   │   ├── Layout.tsx          App shell with sidebar navigation + user menu/logout
 │   │   ├── Modal.tsx           Generic modal wrapper
 │   │   ├── PageHeader.tsx      Page title + optional action button
+│   │   ├── RequireAuth.tsx     Route guard — redirects to /login; mounts per-user StoreProvider
 │   │   └── StatCard.tsx        Dashboard metric card
 │   ├── context/
-│   │   └── StoreContext.tsx    React Context — exposes store + Google Sheets state
+│   │   ├── AuthContext.tsx     React Context — exposes login/register/logout + session state
+│   │   └── StoreContext.tsx    React Context — exposes store + Google Sheets state (per user)
 │   ├── hooks/
-│   │   ├── useStore.ts         All CRUD operations + localStorage read/write
-│   │   └── useGoogleSheets.ts  Google Sheets connection, token management, auto-sync
+│   │   ├── useAuth.ts          Login/register/session state, token persistence, /me rehydration
+│   │   ├── useStore.ts         All CRUD operations + per-user localStorage read/write
+│   │   └── useGoogleSheets.ts  Google Sheets connection (per user), token management, auto-sync
 │   ├── pages/
+│   │   ├── Login.tsx           Sign in / create account + "Continue with Google"
 │   │   ├── Banks.tsx           Bank connection list + OAuth callback handler
 │   │   ├── Dashboard.tsx       Overview: stats, allocation pie, recent activity
 │   │   ├── Investments.tsx     Portfolio table with add/edit/delete
@@ -247,8 +320,11 @@ fintrack/
 │   │   ├── Reports.tsx         Bar + pie charts for expenses and portfolio
 │   │   └── Settings.tsx        Currency, goals, Google Sheets backup, data management
 │   ├── services/
+│   │   ├── auth/
+│   │   │   └── api.ts          Fetch wrapper for /auth/* routes on the proxy
 │   │   ├── googleSheets/
-│   │   │   ├── auth.ts         PKCE OAuth 2.0 flow direct to Google (no proxy needed)
+│   │   │   ├── auth.ts         PKCE OAuth 2.0 flow direct to Google (redirect path parameterized
+│   │   │   │                   for both /login and /settings; no proxy needed)
 │   │   │   ├── api.ts          Sheets API v4: createSpreadsheet, batchUpdateValues
 │   │   │   └── sync.ts         Serialises investments/expenses/settings to row arrays
 │   │   └── openBanking/
@@ -258,13 +334,16 @@ fintrack/
 │   │       ├── pkce.ts         PKCE verifier/challenge generation (Web Crypto API)
 │   │       └── sync.ts         Maps OFB data → FinTrack Investment/Expense models
 │   ├── types/
-│   │   ├── googleSheets.ts     GoogleSheetsConfig type + storage key constant
+│   │   ├── auth.ts             AuthUser, AuthResponse types
+│   │   ├── googleSheets.ts     GoogleSheetsConfig type + per-user storage key helper
 │   │   ├── index.ts            TypeScript interfaces: Investment, Expense, AppSettings
 │   │   └── openBanking.ts      OFB API types: banks, consents, accounts, transactions
 │   ├── utils/
 │   │   ├── calculations.ts     P&L, monthly totals, allocation, savings rate
-│   │   └── format.ts           Currency, percent, and date formatting helpers
-│   ├── App.tsx                 Route definitions
+│   │   ├── format.ts           Currency, percent, and date formatting helpers
+│   │   └── migrateLegacyStorage.ts  One-time copy of pre-login flat storage into the first
+│   │                           logged-in user's namespaced keys
+│   ├── App.tsx                 Route definitions (public /login + authenticated app shell)
 │   ├── index.css               Tailwind v4 entry point + theme tokens
 │   └── main.tsx                React app entry point
 ├── index.html
@@ -277,9 +356,16 @@ fintrack/
 
 ## Data Storage
 
+### Server-side (login accounts only)
+
+Account records — email, hashed password (bcrypt), linked Google ID, display name — live
+in `server/data/users.json` (gitignored). No financial data is ever sent to or stored on
+the server; the proxy only handles authentication.
+
 ### Local (always active)
 
-All data is saved in **`window.localStorage`** under key `fintrack_data`:
+Financial data is saved in **`window.localStorage`**, namespaced per logged-in account
+under key `fintrack_data_<userId>`:
 
 ```json
 {
@@ -290,10 +376,16 @@ All data is saved in **`window.localStorage`** under key `fintrack_data`:
 }
 ```
 
-Google Sheets connection config is stored separately under key `fintrack_gs_config` and contains the access/refresh tokens, spreadsheet ID, and last sync timestamp. Tokens never leave your machine except when communicating with Google's own OAuth and Sheets endpoints.
+Google Sheets connection config is stored separately under key `fintrack_gs_config_<userId>` and contains the access/refresh tokens, spreadsheet ID, and last sync timestamp. Tokens never leave your machine except when communicating with Google's own OAuth and Sheets endpoints.
+
+The login session itself is a JWT stored under `fintrack_auth_token` (unencrypted, like
+the OAuth tokens above — consistent with this app's existing local-trust model). A
+one-time migration flag, `fintrack_migrated_v2`, marks whether the pre-login flat
+`fintrack_data` / `fintrack_gs_config` keys (from versions before login existed) have
+already been copied into the first account that logs in — see [Login](#login).
 
 To inspect: DevTools → Application → Local Storage → `http://localhost:5173`.  
-To clear: **Settings → Clear All Data**.
+To clear your own data: **Settings → Clear All Data** (also logs you out; the account itself is untouched).
 
 ### Remote (Google Sheets — optional)
 
@@ -303,12 +395,13 @@ When connected, data is written to three tabs in a spreadsheet named **FinTrack 
 
 ## First-Time Setup in the App
 
-1. Open the app at http://localhost:5173
-2. Go to **Settings** → set your base currency and monthly income goal
-3. *(Optional)* Go to **Settings → Google Sheets Backup** → **Sign in with Google** to enable remote sync
-4. Go to **Investments** → add portfolio positions manually, or connect a bank via **Banks**
-5. Go to **Expenses** → add monthly costs manually, or let bank sync import transactions
-6. Return to **Dashboard** — your financial overview is populated
+1. Open the app at http://localhost:5173 — you'll land on the login screen
+2. **Create account** with an email/password, or **Continue with Google**
+3. Go to **Settings** → set your base currency and monthly income goal
+4. *(Optional, if you signed up with a password)* Go to **Settings → Google Sheets Backup** → **Sign in with Google** to enable remote sync
+5. Go to **Investments** → add portfolio positions manually, or connect a bank via **Banks**
+6. Go to **Expenses** → add monthly costs manually, or let bank sync import transactions
+7. Return to **Dashboard** — your financial overview is populated
 
 ---
 
@@ -347,19 +440,44 @@ Ensure `VITE_GOOGLE_CLIENT_ID` is set in `.env` and the dev server was restarted
 
 ### Google Sheets — OAuth error after redirect
 
-Check that `http://localhost:5173/settings` is listed as an Authorized redirect URI in your Google Cloud credential. The URI must match exactly (no trailing slash).
+Check that both `http://localhost:5173/login` and `http://localhost:5173/settings` are listed as Authorized redirect URIs in your Google Cloud credential. The URI must match exactly (no trailing slash).
 
 ### Google Sheets — token expired, sync stopped
 
 Go to **Settings → Disconnect** and reconnect. A new spreadsheet is created; copy any manual data from the old one if needed.
 
-### Proxy not running — bank connection fails
+### Proxy not running — can't log in, or bank connection fails
 
 ```bash
 npm run proxy
 ```
 
-The app works fully without the proxy for manual tracking and Google Sheets sync.
+The proxy is required for login — unlike earlier versions, the app can no longer run
+standalone.
+
+### "Sessions keep getting logged out after every restart"
+
+`JWT_SECRET` isn't set in `.env`, so the proxy generates a new random one on every
+startup, invalidating all existing sessions. Set it once and this stops:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+# paste the output as JWT_SECRET= in .env
+```
+
+### "Continue with Google" button shows a warning instead of signing in
+
+Same cause as the Google Sheets Backup issue above — `VITE_GOOGLE_CLIENT_ID` isn't set,
+or the dev server wasn't restarted after adding it.
+
+### My existing data disappeared after upgrading to a version with login
+
+It should have been migrated automatically into the first account you log in with (see
+[Login](#login) and [Data Storage](#data-storage)). If you tested with a throwaway
+account first, your real data may have been attached to that account instead — check
+`localStorage` for the old flat `fintrack_data` key (still present, untouched) and the
+`fintrack_migrated_v2` flag; clearing that flag and logging in again with the correct
+account re-runs the migration.
 
 ### Build fails with TypeScript errors
 
@@ -389,7 +507,8 @@ The app uses client-side routing. Use `npm run preview` instead of opening the f
 | Icons | lucide-react | latest |
 | Date utils | date-fns | latest |
 | State | React Context + useState | — |
-| Persistence | localStorage (primary) + Google Sheets (optional remote) | — |
-| Google Sheets | OAuth 2.0 + PKCE, Sheets API v4 | Desktop app credentials |
+| Persistence | localStorage (per-account, primary) + Google Sheets (optional remote) | — |
+| Login | JWT sessions + bcrypt password hashing | jsonwebtoken, bcryptjs |
+| Google Sheets & Google login | OAuth 2.0 + PKCE, Sheets API v4, google-auth-library (server-side id_token verification) | Desktop app credentials |
 | Open Finance | OAuth 2.0 + PKCE (FAPI 1.0), OFB APIs v1–v2 | OFB standard |
-| Proxy server | Express + node-fetch | Node.js 18+ |
+| Proxy server | Express + node-fetch + dotenv | Node.js 18+ |

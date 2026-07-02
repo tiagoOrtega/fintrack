@@ -2,7 +2,11 @@ import { useState, useCallback } from 'react'
 import type { AppStore, Investment, Expense, AppSettings } from '../types'
 import type { ConnectedBank } from '../types/openBanking'
 
-const STORAGE_KEY = 'fintrack_data'
+export const STORAGE_KEY = 'fintrack_data'
+
+export function getStoreKey(userId: string): string {
+  return `${STORAGE_KEY}_${userId}`
+}
 
 const DEFAULT_SETTINGS: AppSettings = {
   baseCurrency: 'BRL',
@@ -10,9 +14,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   savingsGoal: 0,
 }
 
-function loadStore(): AppStore {
+function loadStore(userId: string): AppStore {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(getStoreKey(userId))
     if (raw) {
       const parsed = JSON.parse(raw) as AppStore
       // Backfill connectedBanks for existing stores that predate this field
@@ -24,17 +28,17 @@ function loadStore(): AppStore {
   return { investments: [], expenses: [], settings: DEFAULT_SETTINGS, connectedBanks: [] }
 }
 
-function saveStore(store: AppStore): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(store))
+function saveStore(userId: string, store: AppStore): void {
+  localStorage.setItem(getStoreKey(userId), JSON.stringify(store))
 }
 
-export function useStore() {
-  const [store, setStore] = useState<AppStore>(loadStore)
+export function useStore(userId: string) {
+  const [store, setStore] = useState<AppStore>(() => loadStore(userId))
 
   const update = useCallback((next: AppStore) => {
     setStore(next)
-    saveStore(next)
-  }, [])
+    saveStore(userId, next)
+  }, [userId])
 
   // ── Investments ────────────────────────────────────────────────────────────
   const addInvestment = useCallback(
